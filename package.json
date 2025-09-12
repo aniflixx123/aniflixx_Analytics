@@ -1,18 +1,34 @@
 {
-	"name": "aniflixx-analytics",
-	"version": "0.0.0",
-	"private": true,
-	"scripts": {
-		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
-		"start": "wrangler dev",
-		"test": "vitest",
-		"cf-typegen": "wrangler types"
-	},
-	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.8.19",
-		"typescript": "^5.5.2",
-		"vitest": "~3.2.0",
-		"wrangler": "^4.35.0"
-	}
+  "name": "aniflixx-analytics",
+  "version": "1.0.0",
+  "description": "Production Analytics Engine for Aniflixx",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "wrangler dev --env development",
+    "build": "tsc",
+    "deploy:dev": "wrangler deploy --env development",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:prod": "wrangler deploy --env production",
+    "tail": "wrangler tail --env production",
+    "logs": "wrangler tail --env production --format pretty",
+    "test": "vitest",
+    "cf-typegen": "wrangler types",
+    "create-kv": "npm run create-kv:dev && npm run create-kv:staging && npm run create-kv:prod",
+    "create-kv:dev": "wrangler kv:namespace create CACHE --env development",
+    "create-kv:staging": "wrangler kv:namespace create CACHE --env staging",
+    "create-kv:prod": "wrangler kv:namespace create CACHE --env production"
+  },
+  "dependencies": {
+    "hono": "^3.12.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240117.0",
+    "@types/node": "^20.11.5",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.1",
+    "wrangler": "^3.22.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }

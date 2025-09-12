@@ -1,23 +1,98 @@
+# wrangler.toml - Production Analytics Worker Configuration
+
 name = "aniflixx-analytics"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
+workers_dev = false
 
+# Production route
+route = "analytics.aniflixx.com/*"
+
+# Node.js compatibility
+node_compat = true
+
+# Production environment
 [env.production]
-vars = { ENVIRONMENT = "production" }
+name = "aniflixx-analytics-prod"
+vars = { 
+  ENVIRONMENT = "production",
+  LOG_LEVEL = "info"
+}
 
-[[analytics_engine_datasets]]
+# Analytics Engine Datasets
+[[env.production.analytics_engine_datasets]]
 binding = "STUDIO_ANALYTICS"
 dataset = "studio_analytics"
 
-[[analytics_engine_datasets]]
+[[env.production.analytics_engine_datasets]]
 binding = "USER_BEHAVIOR"
 dataset = "user_behavior"
 
-[[analytics_engine_datasets]]
+[[env.production.analytics_engine_datasets]]
 binding = "REVENUE_TRACKING"
 dataset = "revenue_tracking"
 
-# Optional: KV for caching
-[[kv_namespaces]]
+# KV Namespace for caching
+[[env.production.kv_namespaces]]
 binding = "CACHE"
-id = "your-kv-namespace-id"
+id = "177dfb36186c4fdfbc74ca97dfe0ab5d"  # ✅ Already correct
+
+# Staging environment
+[env.staging]
+name = "aniflixx-analytics-staging"
+vars = { 
+  ENVIRONMENT = "staging",
+  LOG_LEVEL = "debug"
+}
+
+[[env.staging.analytics_engine_datasets]]
+binding = "STUDIO_ANALYTICS"
+dataset = "studio_analytics_staging"
+
+[[env.staging.analytics_engine_datasets]]
+binding = "USER_BEHAVIOR"
+dataset = "user_behavior_staging"
+
+[[env.staging.analytics_engine_datasets]]
+binding = "REVENUE_TRACKING"
+dataset = "revenue_tracking_staging"
+
+[[env.staging.kv_namespaces]]
+binding = "CACHE"
+id = "c1ccf65dae8843bd869fdb54fd8eb87a"  # ✅ Updated with staging KV ID
+
+# Development environment
+[env.development]
+name = "aniflixx-analytics-dev"
+vars = { 
+  ENVIRONMENT = "development",
+  LOG_LEVEL = "debug"
+}
+
+[[env.development.analytics_engine_datasets]]
+binding = "STUDIO_ANALYTICS"
+dataset = "studio_analytics_dev"
+
+[[env.development.analytics_engine_datasets]]
+binding = "USER_BEHAVIOR"
+dataset = "user_behavior_dev"
+
+[[env.development.analytics_engine_datasets]]
+binding = "REVENUE_TRACKING"
+dataset = "revenue_tracking_dev"
+
+[[env.development.kv_namespaces]]
+binding = "CACHE"
+id = "8edcd9f900bf4447aa5a07cd33c4704f"  # ✅ Updated with development KV ID
+
+# Limits
+[limits]
+cpu_ms = 50
+
+# Build configuration
+[build]
+command = "npm install && npm run build"
+
+[build.upload]
+format = "modules"
+main = "./dist/index.js"
