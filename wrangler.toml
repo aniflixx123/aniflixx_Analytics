@@ -1,0 +1,23 @@
+name = "aniflixx-analytics"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[env.production]
+vars = { ENVIRONMENT = "production" }
+
+[[analytics_engine_datasets]]
+binding = "STUDIO_ANALYTICS"
+dataset = "studio_analytics"
+
+[[analytics_engine_datasets]]
+binding = "USER_BEHAVIOR"
+dataset = "user_behavior"
+
+[[analytics_engine_datasets]]
+binding = "REVENUE_TRACKING"
+dataset = "revenue_tracking"
+
+# Optional: KV for caching
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-kv-namespace-id"
