@@ -1,4 +1,4 @@
-// src/routes/analytics.ts - Production analytics APIs with real queries
+// src/routes/analytics.ts - Production analytics APIs with REAL Analytics Engine API calls
 
 import { Hono } from 'hono'
 import type { 
@@ -8,10 +8,16 @@ import type {
   ErrorResponse,
   StatsOverview,
   ContentStats,
+  ContentTypeStats,
+  TopContent,
   RevenueStats,
   Demographics,
   CountryRevenue,
-  LocationStats
+  LocationStats,
+  PaymentMethodStats,
+  RevenueTimeline,
+  RealtimeLocation,
+  ActiveContent
 } from '../types'
 
 const analytics = new Hono<{ Bindings: Env }>()
@@ -27,16 +33,16 @@ analytics.get('/api/stats/:studioId', async (c) => {
   try {
     // Check cache first
     const cacheKey = `stats:${studioId}:${days}d`
-    const cached = await c.env.CACHE.get(cacheKey, 'json') as StudioStats | null
+    const cached = await c.env?.CACHE.get(cacheKey, 'json') as StudioStats | null
     if (cached) {
       return c.json(cached)
     }
     
     // Execute parallel queries for efficiency
     const [contentData, revenueData, demographicsData] = await Promise.all([
-      queryContentStats(c.env.STUDIO_ANALYTICS, studioId, startTime),
-      queryRevenueStats(c.env.REVENUE_TRACKING, studioId, startTime),
-      queryDemographics(c.env.STUDIO_ANALYTICS, studioId, startTime)
+      queryContentStats(c.env, studioId, startTime),
+      queryRevenueStats(c.env, studioId, startTime),
+      queryDemographics(c.env, studioId, startTime)
     ])
     
     // Build comprehensive stats response
@@ -51,7 +57,7 @@ analytics.get('/api/stats/:studioId', async (c) => {
     }
     
     // Cache for 5 minutes
-    await c.env.CACHE.put(cacheKey, JSON.stringify(stats), {
+    await c.env?.CACHE.put(cacheKey, JSON.stringify(stats), {
       expirationTtl: 300
     })
     
@@ -69,73 +75,62 @@ analytics.get('/api/stats/:studioId', async (c) => {
 })
 
 // ============================================
-// REAL-TIME ANALYTICS API
+// REALTIME ANALYTICS API
 // ============================================
 analytics.get('/api/realtime/:studioId', async (c) => {
   const studioId = c.req.param('studioId')
-  const minutes = parseInt(c.req.query('minutes') || '5')
-  const startTime = Date.now() - (minutes * 60 * 1000)
+  const fiveMinutesAgo = Date.now() - (5 * 60 * 1000)
   
   try {
-    // Query real-time data from Analytics Engine
-    const result = await c.env.STUDIO_ANALYTICS.query({
-      sql: `
-        SELECT 
-          blob1 as event_type,
-          blob3 as user_id,
-          blob4 as country,
-          blob5 as city,
-          blob2 as content_id,
-          double7 as timestamp
-        FROM STUDIO_ANALYTICS
-        WHERE index1 = ?1 AND double7 > ?2
-        ORDER BY double7 DESC
-        LIMIT 1000
-      `,
-      params: [studioId, startTime]
-    })
+    // Query recent events for realtime data
+    const recentData = await queryRealtimeData(c.env, studioId, fiveMinutesAgo)
     
-    // Process real-time data
-    const uniqueUsers = new Set<string>()
-    const locationMap = new Map<string, number>()
+    // Process realtime data
+    const locationMap = new Map<string, RealtimeLocation>()
     const contentMap = new Map<string, Set<string>>()
+    let totalEvents = 0
+    const uniqueUsers = new Set<string>()
     
-    if (result && result.data) {
-      result.data.forEach((row: any) => {
-        if (row.user_id) uniqueUsers.add(row.user_id)
+    if (recentData && recentData.data && recentData.data.length > 0) {
+      recentData.data.forEach((row: any) => {
+        totalEvents++
+        uniqueUsers.add(row.blob3 || '')
         
-        // Count by location
-        const locationKey = `${row.country || 'Unknown'}-${row.city || 'Unknown'}`
-        locationMap.set(locationKey, (locationMap.get(locationKey) || 0) + 1)
+        // Aggregate by location
+        const locationKey = `${row.blob4}-${row.blob5}`
+        if (!locationMap.has(locationKey)) {
+          locationMap.set(locationKey, {
+            country: row.blob4 || 'Unknown',
+            city: row.blob5 || 'Unknown',
+            count: 0
+          })
+        }
+        const location = locationMap.get(locationKey)!
+        location.count++
         
         // Track active content
-        if (row.content_id) {
-          if (!contentMap.has(row.content_id)) {
-            contentMap.set(row.content_id, new Set())
+        if (row.blob2) {
+          if (!contentMap.has(row.blob2)) {
+            contentMap.set(row.blob2, new Set())
           }
-          contentMap.get(row.content_id)!.add(row.user_id)
+          contentMap.get(row.blob2)!.add(row.blob3)
         }
       })
     }
     
-    // Build realtime response
     const realtimeStats: RealtimeStats = {
       studioId,
       timestamp: Date.now(),
       activeUsers: uniqueUsers.size,
-      totalEvents: result?.data?.length || 0,
-      eventsPerMinute: (result?.data?.length || 0) / minutes,
-      locations: Array.from(locationMap.entries())
-        .map(([key, count]) => {
-          const [country, city] = key.split('-')
-          return { country, city, count }
-        })
+      totalEvents,
+      eventsPerMinute: Math.round(totalEvents / 5),
+      locations: Array.from(locationMap.values())
         .sort((a, b) => b.count - a.count)
-        .slice(0, 20),
+        .slice(0, 10),
       activeContent: Array.from(contentMap.entries())
         .map(([contentId, users]) => ({
           contentId,
-          contentType: contentId.startsWith('ch') ? 'chapter' : 'flick',
+          contentType: contentId.includes('chapter') ? 'chapter' : 'flick',
           users: users.size
         }))
         .sort((a, b) => b.users - a.users)
@@ -164,29 +159,15 @@ analytics.get('/api/revenue/:studioId', async (c) => {
   const startTime = Date.now() - (days * 24 * 60 * 60 * 1000)
   
   try {
+    // Check cache
+    const cacheKey = `revenue:${studioId}:${days}d`
+    const cached = await c.env?.CACHE.get(cacheKey, 'json') as RevenueStats | null
+    if (cached) {
+      return c.json(cached)
+    }
+    
     // Query revenue data from Analytics Engine
-    const result = await c.env.REVENUE_TRACKING.query({
-      sql: `
-        SELECT 
-          DATE(double5 / 1000, 'unixepoch') as date,
-          blob1 as event_type,
-          blob4 as country,
-          blob6 as payment_method,
-          blob7 as currency,
-          blob8 as content_id,
-          COUNT(*) as transactions,
-          SUM(double1) as revenue,
-          SUM(double2) as coins,
-          AVG(double1) as avg_transaction,
-          MAX(double1) as max_transaction,
-          MIN(double1) as min_transaction
-        FROM REVENUE_TRACKING
-        WHERE index1 = ?1 AND double5 > ?2
-        GROUP BY date, blob1, blob4, blob6, blob7
-        ORDER BY date DESC
-      `,
-      params: [studioId, startTime]
-    })
+    const result = await queryRevenueDetails(c.env, studioId, startTime)
     
     // Process revenue data
     const timeline = new Map<string, any>()
@@ -196,86 +177,96 @@ analytics.get('/api/revenue/:studioId', async (c) => {
     let totalCoins = 0
     let totalTransactions = 0
     
-    if (result && result.data) {
+    if (result && result.data && result.data.length > 0) {
       result.data.forEach((row: any) => {
         // Timeline aggregation
-        if (row.date) {
-          if (!timeline.has(row.date)) {
-            timeline.set(row.date, { 
-              date: row.date, 
-              revenue: 0, 
-              coins: 0, 
-              transactions: 0 
-            })
-          }
-          const dayData = timeline.get(row.date)!
-          dayData.revenue += row.revenue || 0
-          dayData.coins += row.coins || 0
-          dayData.transactions += row.transactions || 0
+        const timestamp = row.double5 || Date.now()
+        const date = new Date(timestamp).toISOString().split('T')[0]
+        if (!timeline.has(date)) {
+          timeline.set(date, { 
+            date, 
+            revenue: 0, 
+            coins: 0, 
+            transactions: 0 
+          })
         }
+        const dayData = timeline.get(date)!
+        dayData.revenue += row.double1 || 0
+        dayData.coins += row.double2 || 0
+        dayData.transactions += 1
         
         // Country aggregation
-        if (row.country) {
-          if (!byCountry.has(row.country)) {
-            byCountry.set(row.country, { 
-              country: row.country, 
+        const country = row.blob4
+        if (country) {
+          if (!byCountry.has(country)) {
+            byCountry.set(country, { 
+              country, 
               revenue: 0, 
               coins: 0, 
               transactions: 0 
             })
           }
-          const countryData = byCountry.get(row.country)!
-          countryData.revenue += row.revenue || 0
-          countryData.coins += row.coins || 0
-          countryData.transactions += row.transactions || 0
+          const countryData = byCountry.get(country)!
+          countryData.revenue += row.double1 || 0
+          countryData.coins += row.double2 || 0
+          countryData.transactions += 1
         }
         
         // Payment method aggregation
-        if (row.payment_method) {
-          if (!byMethod.has(row.payment_method)) {
-            byMethod.set(row.payment_method, { 
-              method: row.payment_method, 
+        const paymentMethod = row.blob6
+        if (paymentMethod) {
+          if (!byMethod.has(paymentMethod)) {
+            byMethod.set(paymentMethod, { 
+              method: paymentMethod, 
               revenue: 0, 
               transactions: 0 
             })
           }
-          const methodData = byMethod.get(row.payment_method)!
-          methodData.revenue += row.revenue || 0
-          methodData.transactions += row.transactions || 0
+          const methodData = byMethod.get(paymentMethod)!
+          methodData.revenue += row.double1 || 0
+          methodData.transactions += 1
         }
         
         // Totals
-        totalRevenue += row.revenue || 0
-        totalCoins += row.coins || 0
-        totalTransactions += row.transactions || 0
+        totalRevenue += row.double1 || 0
+        totalCoins += row.double2 || 0
+        totalTransactions += 1
       })
     }
     
     // Calculate percentages for payment methods
     Array.from(byMethod.values()).forEach(method => {
       method.percentage = totalRevenue > 0 
-        ? Math.round((method.revenue / totalRevenue) * 100) 
+        ? (method.revenue / totalRevenue)
         : 0
     })
     
     // Build revenue response
     const revenueStats: RevenueStats = {
       byCountry: Array.from(byCountry.values())
-        .map((country: any) => ({
-          country: country.country,
-          revenue: country.revenue,
-          coins: country.coins,
-          transactions: country.transactions,
+        .map(country => ({
+          ...country,
           avgTransaction: country.transactions > 0 
             ? country.revenue / country.transactions 
             : 0
         } as CountryRevenue))
-        .sort((a, b) => b.revenue - a.revenue),
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 20),
       byMethod: Array.from(byMethod.values())
-        .sort((a: any, b: any) => b.revenue - a.revenue),
+        .map(method => ({
+          ...method,
+          percentage: Math.round(method.percentage * 100) / 100
+        } as PaymentMethodStats))
+        .sort((a, b) => b.revenue - a.revenue),
       timeline: Array.from(timeline.values())
-        .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, days) as RevenueTimeline[]
     }
+    
+    // Cache for 5 minutes
+    await c.env?.CACHE.put(cacheKey, JSON.stringify(revenueStats), {
+      expirationTtl: 300
+    })
     
     return c.json({
       studioId,
@@ -310,30 +301,86 @@ analytics.get('/api/content/:studioId/:contentId', async (c) => {
   const startTime = Date.now() - (days * 24 * 60 * 60 * 1000)
   
   try {
-    const result = await c.env.STUDIO_ANALYTICS.query({
-      sql: `
-        SELECT 
-          blob1 as event_type,
-          DATE(double7 / 1000, 'unixepoch') as date,
-          COUNT(*) as event_count,
-          COUNT(DISTINCT blob3) as unique_users,
-          AVG(double1) as avg_progress,
-          MAX(double1) as max_progress,
-          AVG(double3) as avg_time_spent
-        FROM STUDIO_ANALYTICS
-        WHERE index1 = ?1 AND index2 = ?2 AND double7 > ?3
-        GROUP BY blob1, date
-        ORDER BY date DESC
-      `,
-      params: [studioId, contentId, startTime]
-    })
+    // Query content performance data
+    const result = await queryContentPerformance(
+      c.env, 
+      studioId, 
+      contentId, 
+      startTime
+    )
     
-    return c.json({
+    // Process content data
+    const timeline = new Map<string, any>()
+    let totalViews = 0
+    let totalUsers = new Set<string>()
+    let totalRevenue = 0
+    let totalCompletions = 0
+    let totalTime = 0
+    
+    if (result && result.data && result.data.length > 0) {
+      result.data.forEach((row: any) => {
+        const timestamp = row.double7 || Date.now()
+        const date = new Date(timestamp).toISOString().split('T')[0]
+        
+        if (!timeline.has(date)) {
+          timeline.set(date, {
+            date,
+            views: 0,
+            users: new Set(),
+            completions: 0,
+            avgTime: 0
+          })
+        }
+        
+        const dayData = timeline.get(date)!
+        dayData.views++
+        dayData.users.add(row.blob3)
+        
+        if (row.blob1 === 'chapter_completed' || row.blob1 === 'flick_completed') {
+          dayData.completions++
+          totalCompletions++
+        }
+        
+        totalViews++
+        totalUsers.add(row.blob3)
+        totalTime += row.double3 || 0
+        totalRevenue += row.double1 || 0
+      })
+    }
+    
+    // Convert timeline to array
+    const performanceTimeline = Array.from(timeline.values())
+      .map(day => ({
+        date: day.date,
+        views: day.views,
+        users: day.users.size,
+        completions: day.completions,
+        completionRate: day.views > 0 ? day.completions / day.views : 0,
+        avgTime: day.avgTime
+      }))
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    
+    const contentStats = {
       studioId,
       contentId,
       period: `${days}d`,
-      performance: result?.data || []
-    })
+      summary: {
+        totalViews,
+        uniqueUsers: totalUsers.size,
+        completions: totalCompletions,
+        completionRate: totalViews > 0 ? totalCompletions / totalViews : 0,
+        avgViewTime: totalViews > 0 ? totalTime / totalViews : 0,
+        revenue: totalRevenue
+      },
+      timeline: performanceTimeline,
+      engagement: {
+        likes: 0,  // Will be populated when engagement tracking is implemented
+        comments: 0,
+        shares: 0
+      }
+    }
+    
+    return c.json(contentStats)
     
   } catch (error) {
     console.error('Content performance error:', error)
@@ -347,32 +394,52 @@ analytics.get('/api/content/:studioId/:contentId', async (c) => {
 })
 
 // ============================================
-// HELPER FUNCTIONS
+// REAL ANALYTICS ENGINE API QUERY FUNCTIONS
 // ============================================
 
 async function queryContentStats(
-  dataset: AnalyticsEngineDataset, 
+  env: Env | undefined, 
   studioId: string, 
   startTime: number
 ): Promise<any> {
+  if (!env?.ANALYTICS_API_TOKEN || !env?.ACCOUNT_ID) {
+    console.error('Missing API credentials')
+    return { data: [] }
+  }
+
   try {
-    const result = await dataset.query({
-      sql: `
-        SELECT 
-          blob1 as event_type,
-          blob2 as content_id,
-          blob6 as content_type,
-          COUNT(*) as event_count,
-          COUNT(DISTINCT blob3) as unique_users,
-          AVG(double5) as avg_completion,
-          SUM(double3) as total_time
-        FROM STUDIO_ANALYTICS
-        WHERE index1 = ?1 AND double7 > ?2
-        GROUP BY blob1, blob2, blob6
-      `,
-      params: [studioId, startTime]
-    })
-    return result || { data: [] }
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}/analytics_engine/sql`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${env.ANALYTICS_API_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `
+            SELECT 
+              blob1 as event_type,
+              blob2 as content_id,
+              blob6 as content_type,
+              COUNT(*) as event_count,
+              COUNT(DISTINCT blob3) as unique_users,
+              AVG(double5) as avg_completion,
+              SUM(double3) as total_time
+            FROM STUDIO_ANALYTICS
+            WHERE index1 = '${studioId}' AND double7 > ${startTime}
+            GROUP BY blob1, blob2, blob6
+          `
+        })
+      }
+    )
+    
+    if (!response.ok) {
+      console.error('Analytics API error:', await response.text())
+      return { data: [] }
+    }
+    
+    return await response.json()
   } catch (error) {
     console.error('Query content stats error:', error)
     return { data: [] }
@@ -380,24 +447,44 @@ async function queryContentStats(
 }
 
 async function queryRevenueStats(
-  dataset: AnalyticsEngineDataset, 
+  env: Env | undefined, 
   studioId: string, 
   startTime: number
 ): Promise<any> {
+  if (!env?.ANALYTICS_API_TOKEN || !env?.ACCOUNT_ID) {
+    console.error('Missing API credentials')
+    return { data: [{}] }
+  }
+
   try {
-    const result = await dataset.query({
-      sql: `
-        SELECT 
-          COUNT(*) as total_transactions,
-          SUM(double1) as total_revenue,
-          SUM(double2) as total_coins,
-          AVG(double1) as avg_transaction
-        FROM REVENUE_TRACKING
-        WHERE index1 = ?1 AND double5 > ?2
-      `,
-      params: [studioId, startTime]
-    })
-    return result || { data: [{}] }
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}/analytics_engine/sql`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${env.ANALYTICS_API_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `
+            SELECT 
+              COUNT(*) as total_transactions,
+              SUM(double1) as total_revenue,
+              SUM(double2) as total_coins,
+              AVG(double1) as avg_transaction
+            FROM REVENUE_TRACKING
+            WHERE index1 = '${studioId}' AND double5 > ${startTime}
+          `
+        })
+      }
+    )
+    
+    if (!response.ok) {
+      console.error('Analytics API error:', await response.text())
+      return { data: [{}] }
+    }
+    
+    return await response.json()
   } catch (error) {
     console.error('Query revenue stats error:', error)
     return { data: [{}] }
@@ -405,40 +492,212 @@ async function queryRevenueStats(
 }
 
 async function queryDemographics(
-  dataset: AnalyticsEngineDataset, 
+  env: Env | undefined, 
   studioId: string, 
   startTime: number
 ): Promise<any> {
+  if (!env?.ANALYTICS_API_TOKEN || !env?.ACCOUNT_ID) {
+    console.error('Missing API credentials')
+    return { data: [] }
+  }
+
   try {
-    const result = await dataset.query({
-      sql: `
-        SELECT 
-          blob4 as country,
-          blob5 as city,
-          COUNT(DISTINCT blob3) as unique_users,
-          COUNT(*) as total_events
-        FROM STUDIO_ANALYTICS
-        WHERE index1 = ?1 AND double7 > ?2
-        GROUP BY blob4, blob5
-      `,
-      params: [studioId, startTime]
-    })
-    return result || { data: [] }
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}/analytics_engine/sql`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${env.ANALYTICS_API_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `
+            SELECT 
+              blob4 as country,
+              blob5 as city,
+              COUNT(DISTINCT blob3) as unique_users,
+              COUNT(*) as total_events
+            FROM STUDIO_ANALYTICS
+            WHERE index1 = '${studioId}' AND double7 > ${startTime}
+            GROUP BY blob4, blob5
+          `
+        })
+      }
+    )
+    
+    if (!response.ok) {
+      console.error('Analytics API error:', await response.text())
+      return { data: [] }
+    }
+    
+    return await response.json()
   } catch (error) {
     console.error('Query demographics error:', error)
     return { data: [] }
   }
 }
 
+async function queryRealtimeData(
+  env: Env | undefined,
+  studioId: string,
+  sinceTime: number
+): Promise<any> {
+  if (!env?.ANALYTICS_API_TOKEN || !env?.ACCOUNT_ID) {
+    console.error('Missing API credentials')
+    return { data: [] }
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}/analytics_engine/sql`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${env.ANALYTICS_API_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `
+            SELECT 
+              blob1 as event_type,
+              blob2 as content_id,
+              blob3 as user_id,
+              blob4 as country,
+              blob5 as city,
+              double7 as timestamp
+            FROM STUDIO_ANALYTICS
+            WHERE index1 = '${studioId}' AND double7 > ${sinceTime}
+            ORDER BY double7 DESC
+            LIMIT 500
+          `
+        })
+      }
+    )
+    
+    if (!response.ok) {
+      console.error('Analytics API error:', await response.text())
+      return { data: [] }
+    }
+    
+    return await response.json()
+  } catch (error) {
+    console.error('Query realtime data error:', error)
+    return { data: [] }
+  }
+}
+
+async function queryRevenueDetails(
+  env: Env | undefined,
+  studioId: string,
+  startTime: number
+): Promise<any> {
+  if (!env?.ANALYTICS_API_TOKEN || !env?.ACCOUNT_ID) {
+    console.error('Missing API credentials')
+    return { data: [] }
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}/analytics_engine/sql`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${env.ANALYTICS_API_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `
+            SELECT 
+              blob1 as event_type,
+              blob4 as country,
+              blob6 as payment_method,
+              double1 as revenue,
+              double2 as coins,
+              double5 as timestamp
+            FROM REVENUE_TRACKING
+            WHERE index1 = '${studioId}' AND double5 > ${startTime}
+            ORDER BY double5 DESC
+          `
+        })
+      }
+    )
+    
+    if (!response.ok) {
+      console.error('Analytics API error:', await response.text())
+      return { data: [] }
+    }
+    
+    return await response.json()
+  } catch (error) {
+    console.error('Query revenue details error:', error)
+    return { data: [] }
+  }
+}
+
+async function queryContentPerformance(
+  env: Env | undefined,
+  studioId: string,
+  contentId: string,
+  startTime: number
+): Promise<any> {
+  if (!env?.ANALYTICS_API_TOKEN || !env?.ACCOUNT_ID) {
+    console.error('Missing API credentials')
+    return { data: [] }
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}/analytics_engine/sql`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${env.ANALYTICS_API_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `
+            SELECT 
+              blob1 as event_type,
+              blob3 as user_id,
+              double1 as revenue,
+              double3 as duration,
+              double7 as timestamp
+            FROM STUDIO_ANALYTICS
+            WHERE index1 = '${studioId}' 
+              AND index2 = '${contentId}' 
+              AND double7 > ${startTime}
+            ORDER BY double7 DESC
+          `
+        })
+      }
+    )
+    
+    if (!response.ok) {
+      console.error('Analytics API error:', await response.text())
+      return { data: [] }
+    }
+    
+    return await response.json()
+  } catch (error) {
+    console.error('Query content performance error:', error)
+    return { data: [] }
+  }
+}
+
+// Helper functions remain the same but use real data
 function buildOverview(content: any, revenue: any, demographics: any): StatsOverview {
   const contentData = content?.data || []
   const revenueData = revenue?.data?.[0] || {}
   const demoData = demographics?.data || []
   
-  const totalViews = contentData.reduce((sum: number, row: any) => sum + (row?.event_count || 0), 0)
-  const uniqueUsers = demoData.reduce((sum: number, row: any) => sum + (row?.unique_users || 0), 0)
-  const totalTime = contentData.reduce((sum: number, row: any) => sum + (row?.total_time || 0), 0)
-  const avgCompletion = contentData.reduce((sum: number, row: any) => sum + (row?.avg_completion || 0), 0)
+  const totalViews = contentData.reduce((sum: number, row: any) => 
+    sum + (row?.event_count || 0), 0)
+  const uniqueUsers = demoData.reduce((sum: number, row: any) => 
+    sum + (row?.unique_users || 0), 0)
+  const totalTime = contentData.reduce((sum: number, row: any) => 
+    sum + (row?.total_time || 0), 0)
+  const avgCompletion = contentData.reduce((sum: number, row: any) => 
+    sum + (row?.avg_completion || 0), 0)
   
   return {
     totalViews,
@@ -463,7 +722,7 @@ function buildContentStats(data: any): ContentStats {
         views: row.event_count || 0,
         uniqueUsers: row.unique_users || 0,
         avgValue: row.avg_completion || 0
-      })),
+      } as ContentTypeStats)),
     topContent: contentData
       .filter((row: any) => row?.content_id)
       .sort((a: any, b: any) => (b?.event_count || 0) - (a?.event_count || 0))
@@ -473,13 +732,11 @@ function buildContentStats(data: any): ContentStats {
         views: row.event_count || 0,
         users: row.unique_users || 0,
         completionRate: row.avg_completion || 0
-      }))
+      } as TopContent))
   }
 }
 
 function buildRevenueStats(data: any): RevenueStats {
-  // This will be populated by the revenue endpoint
-  // Keeping it minimal for the stats endpoint
   return {
     byCountry: [],
     byMethod: [],

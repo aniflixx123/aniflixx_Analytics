@@ -1,4 +1,3 @@
-// src/index.ts - Main Analytics Worker Entry Point
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -78,7 +77,8 @@ app.get('/health', (c) => {
   return c.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime ? process.uptime() : 'N/A'
+    environment: c.env?.ENVIRONMENT || 'production',
+    logLevel: c.env?.LOG_LEVEL || 'info'
   })
 })
 
@@ -111,4 +111,5 @@ app.onError((err, c) => {
   }, 500)
 })
 
+// Export for Cloudflare Workers
 export default app

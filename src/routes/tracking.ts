@@ -1,4 +1,4 @@
-// src/routes/tracking.ts - Production tracking endpoint
+// src/routes/tracking.ts - Fixed with single index for Analytics Engine
 
 import { Hono } from 'hono'
 import type { 
@@ -32,7 +32,7 @@ tracking.post('/track', async (c) => {
     }
     
     // Enrich with Cloudflare data
-    const enrichedData = enrichTrackingData(body, c.req.raw.cf as CloudflareData, c.req)
+    const enrichedData = enrichTrackingData(body, c.req.raw.cf as CloudflareData, c.req.raw)
     
     // Route to appropriate dataset
     await routeEventToDataset(enrichedData, c.env)
@@ -101,7 +101,7 @@ tracking.post('/track/batch', async (c) => {
           continue
         }
         
-        const enrichedData = enrichTrackingData(event, cf, c.req)
+        const enrichedData = enrichTrackingData(event, cf, c.req.raw)
         await routeEventToDataset(enrichedData, c.env)
         results.push({ success: true, tracked: event.event })
       } catch (error) {
@@ -183,8 +183,13 @@ function enrichTrackingData(
 // ============================================
 async function routeEventToDataset(
   data: EnrichedTrackingData, 
-  env: Env
+  env: Env | undefined
 ): Promise<void> {
+  if (!env) {
+    console.error('Environment bindings not available')
+    return
+  }
+
   const { event, userId, studioId = 'unknown' } = data
   
   // Determine which dataset to use based on event type
@@ -220,23 +225,27 @@ async function trackRevenueEvent(
 ): Promise<void> {
   const dataPoint: AnalyticsEngineDataPoint = {
     blobs: [
-      data.event,
-      data.studioId || '',
-      data.userId,
-      data.country,
-      data.city,
-      data.paymentMethod || '',
-      data.currency || 'USD',
-      data.contentId || ''
+      data.event,                    // blob1: event type
+      data.studioId || '',           // blob2: studio ID
+      data.userId,                    // blob3: user ID
+      data.country,                   // blob4: country
+      data.city,                      // blob5: city
+      (data as any).paymentMethod || '', // blob6: payment method
+      (data as any).currency || 'USD',   // blob7: currency
+      (data as any).contentId || ''      // blob8: content ID
     ],
     doubles: [
-      data.amount || 0,
-      data.coins || 0,
-      data.tax || 0,
-      data.fee || 0,
-      data.timestamp
+      (data as any).amount || 0,     // double1: amount
+      (data as any).coins || 0,      // double2: coins
+      (data as any).tax || 0,        // double3: tax
+      (data as any).fee || 0,        // double4: fee
+      data.timestamp,                 // double5: timestamp
+      data.latitude,                  // double6: latitude
+      data.longitude                  // double7: longitude
     ],
-    indexes: [data.studioId || 'unknown', data.userId]
+    indexes: [
+      data.studioId || 'unknown'     // index1: studio ID ONLY (removed user ID)
+    ]
   }
   
   await dataset.writeDataPoint(dataPoint)
@@ -268,27 +277,30 @@ async function trackContentEvent(
   data: EnrichedTrackingData, 
   dataset: AnalyticsEngineDataset
 ): Promise<void> {
+  // Store user ID and content ID in blobs since we can only have 1 index
   const dataPoint: AnalyticsEngineDataPoint = {
     blobs: [
-      data.event,
-      data.contentId || data.chapterId || data.flickId || '',
-      data.userId,
-      data.country,
-      data.city,
-      data.contentType || '',
-      data.seriesId || '',
-      data.quality || ''
+      data.event,                     // blob1: event type
+      (data as any).contentId || (data as any).chapterId || (data as any).flickId || '', // blob2: content ID
+      data.userId,                     // blob3: user ID
+      data.country,                    // blob4: country
+      data.city,                       // blob5: city
+      (data as any).contentType || '', // blob6: content type
+      (data as any).seriesId || '',    // blob7: series ID
+      (data as any).quality || ''      // blob8: quality/other metadata
     ],
     doubles: [
-      data.pageNumber || data.watchTime || 0,
-      data.totalPages || data.duration || 0,
-      data.readingTime || data.bufferingTime || 0,
-      data.scrollDepth || data.bitrate || 0,
-      data.completionRate || 0,
-      data.engagement || 0,
-      data.timestamp
+      (data as any).pageNumber || (data as any).watchTime || 0,  // double1: progress metric
+      (data as any).totalPages || (data as any).duration || 0,    // double2: total metric
+      (data as any).readingTime || (data as any).bufferingTime || 0, // double3: time spent
+      (data as any).scrollDepth || (data as any).bitrate || 0,    // double4: engagement metric
+      (data as any).completionRate || 0,                           // double5: completion rate
+      (data as any).engagement || 0,                               // double6: engagement score
+      data.timestamp                                               // double7: timestamp
     ],
-    indexes: [data.studioId || 'unknown', data.contentId || '']
+    indexes: [
+      data.studioId || 'unknown'      // index1: studio ID ONLY
+    ]
   }
   
   await dataset.writeDataPoint(dataPoint)
@@ -301,24 +313,30 @@ async function trackUserBehaviorEvent(
   data: EnrichedTrackingData, 
   dataset: AnalyticsEngineDataset
 ): Promise<void> {
+  // Store user ID and session ID in blobs since we can only have 1 index
   const dataPoint: AnalyticsEngineDataPoint = {
     blobs: [
-      data.event,
-      data.studioId || '',
-      data.country,
-      data.city,
-      data.referrer || '',
-      data.source || '',
-      data.medium || '',
-      data.campaign || ''
+      data.event,                      // blob1: event type
+      data.userId,                      // blob2: user ID (moved from index)
+      data.sessionId || '',             // blob3: session ID (moved from index)
+      data.country,                     // blob4: country
+      data.city,                        // blob5: city
+      (data as any).referrer || '',     // blob6: referrer
+      (data as any).source || '',       // blob7: traffic source
+      (data as any).medium || ''        // blob8: traffic medium
     ],
     doubles: [
-      data.value || 1,
-      data.duration || 0,
-      data.score || 0,
-      data.timestamp
+      (data as any).value || 1,        // double1: event value
+      (data as any).duration || 0,     // double2: duration
+      (data as any).score || 0,        // double3: score/rating
+      data.latitude,                    // double4: latitude
+      data.longitude,                   // double5: longitude
+      data.asn,                         // double6: ASN
+      data.timestamp                    // double7: timestamp
     ],
-    indexes: [data.userId, data.sessionId || '']
+    indexes: [
+      data.studioId || 'global'        // index1: studio ID (or 'global' for non-studio events)
+    ]
   }
   
   await dataset.writeDataPoint(dataPoint)

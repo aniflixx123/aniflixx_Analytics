@@ -1,11 +1,22 @@
 // src/types.ts - All TypeScript type definitions
+import type { KVNamespace, AnalyticsEngineDataset } from '@cloudflare/workers-types'
 
+// This is the structure Hono expects
 export interface Env {
   STUDIO_ANALYTICS: AnalyticsEngineDataset
   USER_BEHAVIOR: AnalyticsEngineDataset
   REVENUE_TRACKING: AnalyticsEngineDataset
   CACHE: KVNamespace
+  ENVIRONMENT: string
+  LOG_LEVEL: string
+  ACCOUNT_ID: string
+  ANALYTICS_API_TOKEN: string
+  [key: string]: any  // Add index signature
 }
+
+// For easier access in your code
+export type Bindings = Env['Bindings']
+export type Variables = Env['Variables']
 
 // ============================================
 // TRACKING TYPES
@@ -250,22 +261,6 @@ export interface AnalyticsEngineDataPoint {
   blobs?: string[]
   doubles?: number[]
   indexes?: string[]
-}
-
-export interface AnalyticsEngineQuery {
-  sql: string
-  params?: any[]
-}
-
-export interface AnalyticsEngineResult {
-  data: any[]
-  meta?: any
-}
-
-// Analytics Engine Dataset interface
-export interface AnalyticsEngineDataset {
-  writeDataPoint(point: AnalyticsEngineDataPoint): Promise<void>
-  query(query: AnalyticsEngineQuery): Promise<AnalyticsEngineResult | any>
 }
 
 // ============================================
