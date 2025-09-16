@@ -1,30 +1,27 @@
 name = "aniflixx-analytics"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
-compatibility_flags = ["nodejs_compat"]
 
-[vars]
+[env.production]
+account_id = "36be7c1a54d196cbf30e4b923fb82fb8"
+
+[[env.production.analytics_engine_datasets]]
+binding = "STUDIO_ANALYTICS"
+
+[[env.production.analytics_engine_datasets]]
+binding = "USER_BEHAVIOR"  
+
+[[env.production.analytics_engine_datasets]]
+binding = "REVENUE_TRACKING"
+
+[[env.production.kv_namespaces]]
+binding = "CACHE"
+id = "eb461eea89d04d498c69d5504e248e87"
+
+[env.production.vars]
 ENVIRONMENT = "production"
 LOG_LEVEL = "info"
 ACCOUNT_ID = "36be7c1a54d196cbf30e4b923fb82fb8"
 
-# KV and Analytics Engine bindings...
-[[kv_namespaces]]
-binding = "CACHE"
-id = "177dfb36186c4fdfbc74ca97dfe0ab5d"
-
-[[analytics_engine_datasets]]
-binding = "STUDIO_ANALYTICS"
-dataset = "studio_analytics"
-
-[[analytics_engine_datasets]]
-binding = "USER_BEHAVIOR"
-dataset = "user_behavior"
-
-[[analytics_engine_datasets]]
-binding = "REVENUE_TRACKING"
-dataset = "revenue_tracking"
-
-[[routes]]
-pattern = "analytics.aniflixx.com/*"
-zone_name = "aniflixx.com"
+[vars]
+ANALYTICS_API_TOKEN = "9jBx8QIQzqQTQSvKnd5HbILCPnim1Csu3BbYMeTB"

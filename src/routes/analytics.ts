@@ -1,4 +1,4 @@
-// src/routes/analytics.ts - Production analytics APIs with REAL Analytics Engine API calls
+// src/routes/analytics.ts - Fixed with lowercase table names and correct COUNT syntax
 
 import { Hono } from 'hono'
 import type { 
@@ -94,14 +94,14 @@ analytics.get('/api/realtime/:studioId', async (c) => {
     if (recentData && recentData.data && recentData.data.length > 0) {
       recentData.data.forEach((row: any) => {
         totalEvents++
-        uniqueUsers.add(row.blob3 || '')
+        uniqueUsers.add(row.user_id || '')
         
         // Aggregate by location
-        const locationKey = `${row.blob4}-${row.blob5}`
+        const locationKey = `${row.country}-${row.city}`
         if (!locationMap.has(locationKey)) {
           locationMap.set(locationKey, {
-            country: row.blob4 || 'Unknown',
-            city: row.blob5 || 'Unknown',
+            country: row.country || 'Unknown',
+            city: row.city || 'Unknown',
             count: 0
           })
         }
@@ -109,11 +109,11 @@ analytics.get('/api/realtime/:studioId', async (c) => {
         location.count++
         
         // Track active content
-        if (row.blob2) {
-          if (!contentMap.has(row.blob2)) {
-            contentMap.set(row.blob2, new Set())
+        if (row.content_id) {
+          if (!contentMap.has(row.content_id)) {
+            contentMap.set(row.content_id, new Set())
           }
-          contentMap.get(row.blob2)!.add(row.blob3)
+          contentMap.get(row.content_id)!.add(row.user_id)
         }
       })
     }
@@ -180,7 +180,7 @@ analytics.get('/api/revenue/:studioId', async (c) => {
     if (result && result.data && result.data.length > 0) {
       result.data.forEach((row: any) => {
         // Timeline aggregation
-        const timestamp = row.double5 || Date.now()
+        const timestamp = row.timestamp || Date.now()
         const date = new Date(timestamp).toISOString().split('T')[0]
         if (!timeline.has(date)) {
           timeline.set(date, { 
@@ -191,12 +191,12 @@ analytics.get('/api/revenue/:studioId', async (c) => {
           })
         }
         const dayData = timeline.get(date)!
-        dayData.revenue += row.double1 || 0
-        dayData.coins += row.double2 || 0
+        dayData.revenue += row.revenue || 0
+        dayData.coins += row.coins || 0
         dayData.transactions += 1
         
         // Country aggregation
-        const country = row.blob4
+        const country = row.country
         if (country) {
           if (!byCountry.has(country)) {
             byCountry.set(country, { 
@@ -207,13 +207,13 @@ analytics.get('/api/revenue/:studioId', async (c) => {
             })
           }
           const countryData = byCountry.get(country)!
-          countryData.revenue += row.double1 || 0
-          countryData.coins += row.double2 || 0
+          countryData.revenue += row.revenue || 0
+          countryData.coins += row.coins || 0
           countryData.transactions += 1
         }
         
         // Payment method aggregation
-        const paymentMethod = row.blob6
+        const paymentMethod = row.payment_method
         if (paymentMethod) {
           if (!byMethod.has(paymentMethod)) {
             byMethod.set(paymentMethod, { 
@@ -223,13 +223,13 @@ analytics.get('/api/revenue/:studioId', async (c) => {
             })
           }
           const methodData = byMethod.get(paymentMethod)!
-          methodData.revenue += row.double1 || 0
+          methodData.revenue += row.revenue || 0
           methodData.transactions += 1
         }
         
         // Totals
-        totalRevenue += row.double1 || 0
-        totalCoins += row.double2 || 0
+        totalRevenue += row.revenue || 0
+        totalCoins += row.coins || 0
         totalTransactions += 1
       })
     }
@@ -319,7 +319,7 @@ analytics.get('/api/content/:studioId/:contentId', async (c) => {
     
     if (result && result.data && result.data.length > 0) {
       result.data.forEach((row: any) => {
-        const timestamp = row.double7 || Date.now()
+        const timestamp = row.timestamp || Date.now()
         const date = new Date(timestamp).toISOString().split('T')[0]
         
         if (!timeline.has(date)) {
@@ -334,17 +334,17 @@ analytics.get('/api/content/:studioId/:contentId', async (c) => {
         
         const dayData = timeline.get(date)!
         dayData.views++
-        dayData.users.add(row.blob3)
+        dayData.users.add(row.user_id)
         
-        if (row.blob1 === 'chapter_completed' || row.blob1 === 'flick_completed') {
+        if (row.event_type === 'chapter_completed' || row.event_type === 'flick_completed') {
           dayData.completions++
           totalCompletions++
         }
         
         totalViews++
-        totalUsers.add(row.blob3)
-        totalTime += row.double3 || 0
-        totalRevenue += row.double1 || 0
+        totalUsers.add(row.user_id)
+        totalTime += row.duration || 0
+        totalRevenue += row.revenue || 0
       })
     }
     
@@ -374,7 +374,7 @@ analytics.get('/api/content/:studioId/:contentId', async (c) => {
       },
       timeline: performanceTimeline,
       engagement: {
-        likes: 0,  // Will be populated when engagement tracking is implemented
+        likes: 0,
         comments: 0,
         shares: 0
       }
@@ -394,7 +394,7 @@ analytics.get('/api/content/:studioId/:contentId', async (c) => {
 })
 
 // ============================================
-// REAL ANALYTICS ENGINE API QUERY FUNCTIONS
+// ANALYTICS ENGINE QUERY FUNCTIONS - FIXED
 // ============================================
 
 async function queryContentStats(
@@ -422,11 +422,11 @@ async function queryContentStats(
               blob1 as event_type,
               blob2 as content_id,
               blob6 as content_type,
-              COUNT(*) as event_count,
+              COUNT() as event_count,
               COUNT(DISTINCT blob3) as unique_users,
               AVG(double5) as avg_completion,
               SUM(double3) as total_time
-            FROM STUDIO_ANALYTICS
+            FROM studio_analytics
             WHERE index1 = '${studioId}' AND double7 > ${startTime}
             GROUP BY blob1, blob2, blob6
           `
@@ -468,11 +468,11 @@ async function queryRevenueStats(
         body: JSON.stringify({
           query: `
             SELECT 
-              COUNT(*) as total_transactions,
+              COUNT() as total_transactions,
               SUM(double1) as total_revenue,
               SUM(double2) as total_coins,
               AVG(double1) as avg_transaction
-            FROM REVENUE_TRACKING
+            FROM revenue_tracking
             WHERE index1 = '${studioId}' AND double5 > ${startTime}
           `
         })
@@ -516,8 +516,8 @@ async function queryDemographics(
               blob4 as country,
               blob5 as city,
               COUNT(DISTINCT blob3) as unique_users,
-              COUNT(*) as total_events
-            FROM STUDIO_ANALYTICS
+              COUNT() as total_events
+            FROM studio_analytics
             WHERE index1 = '${studioId}' AND double7 > ${startTime}
             GROUP BY blob4, blob5
           `
@@ -565,7 +565,7 @@ async function queryRealtimeData(
               blob4 as country,
               blob5 as city,
               double7 as timestamp
-            FROM STUDIO_ANALYTICS
+            FROM studio_analytics
             WHERE index1 = '${studioId}' AND double7 > ${sinceTime}
             ORDER BY double7 DESC
             LIMIT 500
@@ -614,7 +614,7 @@ async function queryRevenueDetails(
               double1 as revenue,
               double2 as coins,
               double5 as timestamp
-            FROM REVENUE_TRACKING
+            FROM revenue_tracking
             WHERE index1 = '${studioId}' AND double5 > ${startTime}
             ORDER BY double5 DESC
           `
@@ -662,9 +662,9 @@ async function queryContentPerformance(
               double1 as revenue,
               double3 as duration,
               double7 as timestamp
-            FROM STUDIO_ANALYTICS
+            FROM studio_analytics
             WHERE index1 = '${studioId}' 
-              AND index2 = '${contentId}' 
+              AND blob2 = '${contentId}' 
               AND double7 > ${startTime}
             ORDER BY double7 DESC
           `
@@ -684,7 +684,7 @@ async function queryContentPerformance(
   }
 }
 
-// Helper functions remain the same but use real data
+// Helper functions
 function buildOverview(content: any, revenue: any, demographics: any): StatsOverview {
   const contentData = content?.data || []
   const revenueData = revenue?.data?.[0] || {}

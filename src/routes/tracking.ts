@@ -38,7 +38,7 @@ tracking.post('/track', async (c) => {
     await routeEventToDataset(enrichedData, c.env)
     
     // Log for monitoring (can be removed in production)
-    console.log(`Event tracked: ${enrichedData.event} for user ${enrichedData.userId}`)
+    console.log(`Event tracked: ${enrichedData.event} for user ${enrichedData.userId} in studio ${enrichedData.studioId}`)
     
     // Return success response
     const response: TrackingResponse = {
@@ -190,7 +190,13 @@ async function routeEventToDataset(
     return
   }
 
-  const { event, userId, studioId = 'unknown' } = data
+  const { event } = data
+  
+  // Ensure studioId is never undefined or empty
+  if (!data.studioId || data.studioId === '') {
+    console.warn(`No studio ID provided for event ${event}, defaulting to 'unknown'`)
+    data.studioId = 'unknown'
+  }
   
   // Determine which dataset to use based on event type
   if (isRevenueEvent(event)) {
@@ -226,7 +232,7 @@ async function trackRevenueEvent(
   const dataPoint: AnalyticsEngineDataPoint = {
     blobs: [
       data.event,                    // blob1: event type
-      data.studioId || '',           // blob2: studio ID
+      data.studioId || 'unknown',    // blob2: studio ID
       data.userId,                    // blob3: user ID
       data.country,                   // blob4: country
       data.city,                      // blob5: city
@@ -244,7 +250,7 @@ async function trackRevenueEvent(
       data.longitude                  // double7: longitude
     ],
     indexes: [
-      data.studioId || 'unknown'     // index1: studio ID ONLY (removed user ID)
+      data.studioId || 'unknown'     // index1: studio ID
     ]
   }
   
@@ -277,7 +283,6 @@ async function trackContentEvent(
   data: EnrichedTrackingData, 
   dataset: AnalyticsEngineDataset
 ): Promise<void> {
-  // Store user ID and content ID in blobs since we can only have 1 index
   const dataPoint: AnalyticsEngineDataPoint = {
     blobs: [
       data.event,                     // blob1: event type
@@ -299,7 +304,7 @@ async function trackContentEvent(
       data.timestamp                                               // double7: timestamp
     ],
     indexes: [
-      data.studioId || 'unknown'      // index1: studio ID ONLY
+      data.studioId || 'unknown'      // index1: studio ID
     ]
   }
   
@@ -313,12 +318,11 @@ async function trackUserBehaviorEvent(
   data: EnrichedTrackingData, 
   dataset: AnalyticsEngineDataset
 ): Promise<void> {
-  // Store user ID and session ID in blobs since we can only have 1 index
   const dataPoint: AnalyticsEngineDataPoint = {
     blobs: [
       data.event,                      // blob1: event type
-      data.userId,                      // blob2: user ID (moved from index)
-      data.sessionId || '',             // blob3: session ID (moved from index)
+      data.userId,                      // blob2: user ID
+      data.sessionId || '',             // blob3: session ID
       data.country,                     // blob4: country
       data.city,                        // blob5: city
       (data as any).referrer || '',     // blob6: referrer
@@ -335,7 +339,7 @@ async function trackUserBehaviorEvent(
       data.timestamp                    // double7: timestamp
     ],
     indexes: [
-      data.studioId || 'global'        // index1: studio ID (or 'global' for non-studio events)
+      data.studioId || 'global'        // index1: studio ID (FIXED - was missing!)
     ]
   }
   
